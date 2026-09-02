@@ -255,7 +255,7 @@ module Sidekiq
             cursor: @_cursor
           }
           logger.warn { "Iteration took longer (%.2f) than Sidekiq's shutdown timeout (%d). This can lead to job processing problems during deploys" % [total, time_limit] }
-          _context.notify("sidekiq.slow_iteration", payload)
+          _context.notify("sidekiq.job.slow_iteration", payload)
         end
       end
 

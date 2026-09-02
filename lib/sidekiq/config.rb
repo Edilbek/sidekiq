@@ -264,11 +264,13 @@ module Sidekiq
       @options[:error_handlers]
     end
 
+    ##
     # Register a proc to receive Sidekiq operational notification events.
     #
     #   Sidekiq.configure_server do |config|
-    #     config.notification_handlers << proc { |event_name, hash, config|
-    #       StatsD.increment(name)
+    #     config.notification_handlers << proc { |note, config|
+    #       puts "Warning: #{note.name} in process #{note.pid}"
+    #       StatsD.increment(note.name)
     #     }
     #   end
     #
@@ -276,14 +278,18 @@ module Sidekiq
     # Hash will hold relevant contextual data which may be useful to diagnose the issue.
     # Keep in mind that these handlers might run when the network or local process is
     # in a questionable state. Your handlers should be conservative in what they do.
+    # See also +Sidekiq::Notification+
     #
     def notification_handlers
       @options[:notification_handlers]
     end
 
+    ##
+    # Fire an operations notification to registered listeners.
     def notify(name, hash = {}) # :nodoc:
+      n = Sidekiq::Notification.new(name, hash)
       @options[:notification_handlers].each do |handler|
-        handler.call(name, hash, self)
+        handler.call(n, self)
       rescue => ex
         l = logger
         l.error "!!! Notification handler THREW AN ERROR !!!"

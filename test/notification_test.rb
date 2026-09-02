@@ -28,45 +28,45 @@ describe "Sidekiq notification" do
 
   it "calls notification handlers" do
     events = []
-    @config.notification_handlers << ->(name, payload, cfg) {
-      events << [name, payload, cfg]
+    @config.notification_handlers << ->(note, cfg) {
+      events << [note, cfg]
     }
 
     @config.notify("sidekiq.slow_rtt", {readings: [1, 2]})
 
     assert_equal 1, events.size
-    assert_equal "sidekiq.slow_rtt", events[0][0]
-    assert_equal({readings: [1, 2]}, events[0][1])
-    assert_equal @config, events[0][2]
+    assert_equal "sidekiq.slow_rtt", events[0][0].name
+    assert_equal({readings: [1, 2]}, events[0][0].context)
+    assert_equal @config, events[0][1]
   end
 
   it "delegates through Sidekiq::Component" do
     events = []
-    @config.notification_handlers << ->(name, payload, _cfg) {
-      events << [name, payload]
+    @config.notification_handlers << ->(note, _cfg) {
+      events << note
     }
 
     NotificationThing.new(@config).notify("test.sidekiq", {foo: "bar"})
 
     assert_equal 1, events.size
-    assert_equal ["test.sidekiq", {foo: "bar"}], events[0]
+    assert_equal Sidekiq::Notification.new("test.sidekiq", {foo: "bar"}), events[0]
   end
 
   it "does not break when a handler raises" do
     output = capture_logging(@config, Logger::ERROR) do
-      @config.notification_handlers << ->(_name, _payload, _cfg) { raise "boom" }
-      @config.notification_handlers << ->(name, _payload, _cfg) { @seen = name }
+      @config.notification_handlers << ->(_note, _cfg) { raise "boom" }
+      @config.notification_handlers << ->(note, _cfg) { @seen = note }
       @config.notify("sidekiq.slow_rtt", {})
     end
 
-    assert_equal "sidekiq.slow_rtt", @seen
+    assert_equal "sidekiq.slow_rtt", @seen.name
     assert_match(/Notification handler THREW AN ERROR/, output)
   end
 
   it "publishes slow_rtt from the launcher" do
     events = []
-    @config.notification_handlers << ->(name, payload, _cfg) {
-      events << [name, payload]
+    @config.notification_handlers << ->(note, _cfg) {
+      events << note
     }
 
     launcher = Sidekiq::Launcher.new(@config)
@@ -89,17 +89,17 @@ describe "Sidekiq notification" do
     end
 
     assert_equal 1, events.size
-    assert_equal "sidekiq.slow_rtt", events[0][0]
-    assert_equal 50_000, events[0][1][:threshold]
-    assert_equal 5, events[0][1][:readings].size
+    assert_equal "sidekiq.redis.slow_rtt", events[0].name
+    assert_equal 50_000, events[0].context[:threshold]
+    assert_equal 5, events[0].context[:readings].size
   ensure
     Sidekiq::Launcher::RTT_READINGS.reset
   end
 
   it "publishes hard_shutdown from the manager" do
     events = []
-    @config.notification_handlers << ->(name, payload, _cfg) {
-      events << [name, payload]
+    @config.notification_handlers << ->(note, _cfg) {
+      events << note
     }
 
     capsule = @config.default_capsule
@@ -117,15 +117,15 @@ describe "Sidekiq notification" do
     end
 
     assert_equal 1, events.size
-    assert_equal "sidekiq.hard_shutdown", events[0][0]
-    assert_equal 1, events[0][1][:job_count]
+    assert_equal "sidekiq.hard_shutdown", events[0].name
+    assert_equal 1, events[0].context[:job_count]
     fetcher.verify
   end
 
-  it "publishes redis_up from the processor" do
+  it "publishes redis.up from the processor" do
     events = []
-    @config.notification_handlers << ->(name, payload, _cfg) {
-      events << [name, payload]
+    @config.notification_handlers << ->(note, _cfg) {
+      events << note
     }
 
     capsule = @config.default_capsule
@@ -139,7 +139,29 @@ describe "Sidekiq notification" do
     processor.send(:get_one)
 
     assert_equal 1, events.size
-    assert_equal "sidekiq.redis_up", events[0][0]
-    assert_operator events[0][1][:downtime], :>=, 2.0
+    assert_equal "sidekiq.redis.up", events.first.name
+    assert_operator events[0].context[:downtime], :>=, 2.0
+    assert_equal "redis://localhost:6379", events[0].context[:url]
+  end
+  it "publishes redis.down from the processor" do
+    events = []
+    @config.notification_handlers << ->(note, _cfg) {
+      events << note
+    }
+
+    capsule = @config.default_capsule
+    processor = Sidekiq::Processor.new(capsule)
+
+    fetcher = Object.new
+    def fetcher.retrieve_work
+      raise "boom"
+    end
+    capsule.define_singleton_method(:fetcher) { fetcher }
+
+    processor.send(:get_one)
+
+    assert_equal 1, events.size
+    assert_equal "sidekiq.redis.down", events.first.name
+    assert_equal "redis://localhost:6379", events[0].context[:url]
   end
 end
