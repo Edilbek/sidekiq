@@ -81,6 +81,7 @@ describe "Sidekiq notification" do
     clock = [0, 60_000]
     launcher.stub(:redis, ->(&block) { block.call(conn) }) do
       Process.stub(:clock_gettime, ->(_clock, unit = nil) {
+        return 0.0 if unit.nil? # debounce uses monotonic seconds
         raise "unexpected unit" unless unit == :microsecond
         clock.shift || 60_000
       }) do
@@ -163,5 +164,46 @@ describe "Sidekiq notification" do
     assert_equal 1, events.size
     assert_equal "sidekiq.redis.down", events.first.name
     assert_equal "redis://localhost:6379", events[0].context[:url]
+  end
+
+  it "debounces redis notifications to once per minute per name" do
+    events = []
+    @config.notification_handlers << ->(note, _cfg) { events << note.name }
+
+    now = 1_000.0
+    Process.stub(:clock_gettime, ->(clock, *) {
+      assert_equal Process::CLOCK_MONOTONIC, clock
+      now
+    }) do
+      @config.notify("sidekiq.redis.down", {url: "redis://localhost:6379"})
+      @config.notify("sidekiq.redis.down", {url: "redis://localhost:6379"})
+      assert_equal ["sidekiq.redis.down"], events
+
+      now = 1_030.0
+      @config.notify("sidekiq.redis.down", {url: "redis://localhost:6379"})
+      assert_equal ["sidekiq.redis.down"], events
+
+      @config.notify("sidekiq.redis.up", {downtime: 1.0})
+      assert_equal ["sidekiq.redis.down", "sidekiq.redis.up"], events
+
+      now = 1_061.0
+      @config.notify("sidekiq.redis.down", {url: "redis://localhost:6379"})
+      assert_equal ["sidekiq.redis.down", "sidekiq.redis.up", "sidekiq.redis.down"], events
+    end
+  end
+
+  it "does not debounce hard_shutdown or slow_iteration" do
+    events = []
+    @config.notification_handlers << ->(note, _cfg) { events << note.name }
+
+    2.times { @config.notify("sidekiq.hard_shutdown", {job_count: 1}) }
+    2.times { @config.notify("sidekiq.job.slow_iteration", {jid: "abc"}) }
+
+    assert_equal [
+      "sidekiq.hard_shutdown",
+      "sidekiq.hard_shutdown",
+      "sidekiq.job.slow_iteration",
+      "sidekiq.job.slow_iteration"
+    ], events
   end
 end

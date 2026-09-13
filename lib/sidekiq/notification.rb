@@ -8,10 +8,12 @@ module Sidekiq
   #  - `sidekiq.redis.slow_rtt` means the round-trip to Redis has been detected
   #    as consistently terrible. This can mean a saturated CPU, terrible network
   #    conditions or an overloaded Redis, it's impossible for Sidekiq to know.
+  #    Debounced to once per minute per process.
   #  - `sidekiq.redis.down` The network connection between the Sidekiq process
-  #    and Redis has dropped.
+  #    and Redis has dropped. Debounced to once per minute per process so
+  #    concurrent processor threads do not each fire a duplicate event.
   #  - `sidekiq.redis.up` The network connection between the Sidekiq process
-  #    and Redis has been restored.
+  #    and Redis has been restored. Debounced like `sidekiq.redis.down`.
   #  - `sidekiq.job.slow_iteration` An iterable job iteration took more than
   #    the graceful shutdown timeout, this can lead to duplicate job execution.
   #  - `sidekiq.hard_shutdown` One or more jobs did not finish in time for graceful
